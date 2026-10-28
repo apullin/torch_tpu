@@ -1245,6 +1245,7 @@ TORCH_LIBRARY_IMPL(aten, AutogradPrivateUse1, m) {
   // All entries should be registered via ImplStable as we don't want to
   // generate a warning for standard aten ops.
   // go/keep-sorted start
+  ImplStable<OpName::kAvgPool1d>(m, AtenAvgPool1dAutograd);
   ImplStable<OpName::kCrossEntropyLoss>(m, AtenCrossEntropyLossAutograd);
   // TODO(b/513607161): remove CtcLossPublic overrides once upstream PyTorch bug
   // is fixed.

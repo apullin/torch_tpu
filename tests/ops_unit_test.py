@@ -19534,6 +19534,134 @@ class OpsGradUnitTest(TorchTpuVsCpuTestBase):
     self.assert_close_tpu_vs_cpu(compute, atol=atol)
 
   @parameterized.product(
+      shape=[(2, 3, 16), (3, 20), (1, 2, 5)],
+      kernel_size=[2, 3],
+      stride=[None, 1, 2, 3],
+      padding=[0, 1],
+      ceil_mode=[False, True],
+      count_include_pad=[False, True],
+      dtype=[torch.float32, torch.bfloat16],
+  )
+  def test_avg_pool1d_backward(
+      self,
+      shape,
+      kernel_size,
+      stride,
+      padding,
+      ceil_mode,
+      count_include_pad,
+      dtype,
+  ):
+    torch.manual_seed(42)
+    x_cpu = torch.randn(shape, dtype=dtype, requires_grad=True)
+    x_tpu = x_cpu.detach().to("tpu").requires_grad_(True)
+    kwargs = {
+        "kernel_size": kernel_size,
+        "padding": padding,
+        "ceil_mode": ceil_mode,
+        "count_include_pad": count_include_pad,
+    }
+    if stride is not None:
+      kwargs["stride"] = stride
+    atol = 5e-3 if dtype == torch.bfloat16 else None
+
+    out_cpu = torch.nn.functional.avg_pool1d(x_cpu, **kwargs)
+    out_tpu = torch.nn.functional.avg_pool1d(x_tpu, **kwargs)
+    self.assertIsNotNone(out_tpu.grad_fn)
+    utils.assert_close(actual=out_tpu.cpu(), expected=out_cpu, atol=atol)
+
+    grad_out_cpu = torch.randn_like(out_cpu)
+    out_cpu.backward(grad_out_cpu)
+    out_tpu.backward(grad_out_cpu.to("tpu"))
+    utils.assert_close(actual=x_tpu.grad.cpu(), expected=x_cpu.grad, atol=atol)
+
+  def test_avg_pool1d_backward_empty_batch(self):
+    x_cpu = torch.randn(0, 3, 16, requires_grad=True)
+    x_tpu = x_cpu.detach().to("tpu").requires_grad_(True)
+
+    out_cpu = torch.nn.functional.avg_pool1d(x_cpu, 2)
+    out_tpu = torch.nn.functional.avg_pool1d(x_tpu, 2)
+    self.assertIsNotNone(out_tpu.grad_fn)
+    self.assertEqual(out_tpu.shape, out_cpu.shape)
+
+    out_cpu.sum().backward()
+    out_tpu.sum().backward()
+    self.assertEqual(x_tpu.grad.shape, x_cpu.grad.shape)
+
+  def test_avg_pool1d_invalid_args_with_grad(self):
+    x = torch.randn(2, 3, 16)
+
+    def compute(device):
+      x_device = x.detach().to(device).requires_grad_(True)
+      # Padding larger than half the kernel size is rejected.
+      return torch.nn.functional.avg_pool1d(x_device, 2, padding=2)
+
+    self.assert_close_tpu_vs_cpu(compute, allow_failure=True)
+
+  def test_avg_pool1d_vmap(self):
+    torch.manual_seed(42)
+    x = torch.randn(4, 3, 16)
+
+    def compute(device):
+      return torch.vmap(lambda t: torch.nn.functional.avg_pool1d(t, 2))(
+          x.to(device)
+      )
+
+    self.assert_close_tpu_vs_cpu(compute)
+
+  def test_avg_pool1d_double_backward(self):
+    torch.manual_seed(42)
+    x_cpu = torch.randn(2, 3, 16, requires_grad=True)
+    x_tpu = x_cpu.detach().to("tpu").requires_grad_(True)
+
+    def grad_of_grad(x):
+      out = torch.nn.functional.avg_pool1d(x, 3, stride=2, padding=1)
+      (grad,) = torch.autograd.grad(out.pow(2).sum(), x, create_graph=True)
+      grad.pow(2).sum().backward()
+      return x.grad
+
+    utils.assert_close(
+        actual=grad_of_grad(x_tpu).cpu(), expected=grad_of_grad(x_cpu)
+    )
+
+  def test_avg_pool1d_forward_ad(self):
+    torch.manual_seed(42)
+    x = torch.randn(2, 3, 16)
+    tangent = torch.randn_like(x)
+
+    def jvp(device):
+      with torch.autograd.forward_ad.dual_level():
+        dual = torch.autograd.forward_ad.make_dual(
+            x.to(device), tangent.to(device)
+        )
+        out = torch.nn.functional.avg_pool1d(dual, 3, stride=2, padding=1)
+        return torch.autograd.forward_ad.unpack_dual(out).tangent
+
+    utils.assert_close(actual=jvp("tpu").cpu(), expected=jvp("cpu"))
+
+  def test_avg_pool1d_backward_compiled(self):
+    def pool(x):
+      return torch.nn.functional.avg_pool1d(x, 3, stride=2, padding=1)
+
+    compiled_pool = torch.compile(
+        pool, backend="tpu", fullgraph=True, dynamic=False
+    )
+    torch.manual_seed(42)
+    for length in (16, 24):
+      x_cpu = torch.randn(2, 3, length, requires_grad=True)
+      x_tpu = x_cpu.detach().to("tpu").requires_grad_(True)
+
+      out_cpu = pool(x_cpu)
+      out_tpu = compiled_pool(x_tpu)
+      self.assertIsNotNone(out_tpu.grad_fn)
+      utils.assert_close(actual=out_tpu.cpu(), expected=out_cpu)
+
+      grad_out = torch.randn_like(out_cpu)
+      out_cpu.backward(grad_out)
+      out_tpu.backward(grad_out.to("tpu"))
+      utils.assert_close(actual=x_tpu.grad.cpu(), expected=x_cpu.grad)
+
+  @parameterized.product(
       shape=[(2, 3, 16), (3, 20)],
       kernel_size=[2, 3],
       stride=[[], [1], [2]],
