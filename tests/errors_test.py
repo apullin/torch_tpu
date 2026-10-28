@@ -2059,6 +2059,33 @@ class TpuVsGpuErrorTest(et.ErrorTestBase):
     ):
       torch.histc(t)
 
+  def test_histc_bounds_infinite_input(self):
+    """Tests that torch.histc() fails when the input has only infinities."""
+    inf = float("inf")
+    t = torch.tensor([inf, inf], device=et.device(), dtype=torch.float32)
+    with et.assert_raises_message(
+        RuntimeError,
+        gpu="""range of [inf, inf] is not finite""",
+        tpu="""histc(): expected min and max to be finite, got inf and inf. Either make sure that the input data is finite, or provide valid finite bounds""",
+    ):
+      torch.histc(t)
+
+    t = torch.tensor([-inf, -inf], device=et.device(), dtype=torch.float32)
+    with et.assert_raises_message(
+        RuntimeError,
+        gpu="""range of [-inf, -inf] is not finite""",
+        tpu="""histc(): expected min and max to be finite, got -inf and -inf. Either make sure that the input data is finite, or provide valid finite bounds""",
+    ):
+      torch.histc(t)
+
+    t = torch.tensor([-inf, inf], device=et.device(), dtype=torch.float32)
+    with et.assert_raises_message(
+        RuntimeError,
+        gpu="""range of [-inf, inf] is not finite""",
+        tpu="""histc(): expected min and max to be finite, got -inf and inf. Either make sure that the input data is finite, or provide valid finite bounds""",
+    ):
+      torch.histc(t)
+
   def test_histc_bounds_not_in_order(self):
     """Tests that torch.histc() fails when the bounds are not in order."""
     t = torch.tensor([0, 0], device=et.device(), dtype=torch.int32)
