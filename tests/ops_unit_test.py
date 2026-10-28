@@ -1940,6 +1940,26 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
         z_val2.cpu(), torch.full((2, 2), 3.0, dtype=torch.float32)
     )
 
+  @parameterized.named_parameters(
+      ("add", lambda x, a: torch.add(x, x, alpha=a)),
+      ("sub", lambda x, a: torch.sub(x, x, alpha=a)),
+      ("addcmul", lambda x, a: torch.addcmul(x, x, x, value=a)),
+      ("addcdiv", lambda x, a: torch.addcdiv(x, x, x, value=a)),
+  )
+  def test_scalar_above_int64_max(
+      self, op: Callable[[torch.Tensor, int], torch.Tensor]
+  ) -> None:
+    """An unsigned scalar above INT64_MAX works as on CPU.
+
+    Args:
+      op: Applies the op to a tensor, with the scalar as alpha or value.
+    """
+
+    def test_fn(device: torch.device) -> torch.Tensor:
+      return op(torch.ones(2, device=device), 2**63)
+
+    self.assert_close_tpu_vs_cpu(test_fn)
+
   def test_binary_arithmetic_out_upcast(self):
     device = torch.device("tpu")
     a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32, device=device)
